@@ -1,5 +1,7 @@
-from __init__ import Logger
-from database import database, User
+from database import database
+from logger import Logger
+from word import Word
+from user import User
 
 
 class DailyWord:
@@ -26,6 +28,11 @@ class DailyWord:
                 return True
         cls.logger.info(f"user {str(user)} tried to cancel a daily word but it doesn't exist")
         return False
+    
+    @classmethod
+    def delete_daily_word(cls, daily_word):
+        cls.logger.info(f"user {str(daily_word.owner)}'s daily word was deleted")
+        cls.all_daily_words.remove(daily_word)
 
     @classmethod
     def get_daily_word(cls, user):
@@ -35,17 +42,17 @@ class DailyWord:
         return None
 
 
-    def __init__(self, num, user:User):
+    def __init__(self, num, user:User, review=False):
         self.owner = user
         if num > 10:
             num = 10
         if num < 1:
             num = 1
-        self.words = database.get_words(num)
+        self.words = database.get_words(num, (user if review else None))
         self.cleared_words = []
         self.word_num = len(self.words)
         self.all_daily_words.append(self)
-        self.logger.info(f"user {str(user)} created a daily word with {self.word_num} words")
+        self.logger.info(f"user {str(user)} created a daily word with {self.word_num} words, review={review}")
 
     def cancel(self):
         self.all_daily_words.remove(self)
@@ -58,17 +65,27 @@ class DailyWord:
         return s
 
     def commit_word(self, user_word, user):
-        for i in range(self.word_num):
-            if self.words[i].word == user_word:
+        for i in range(len(self.words)):
+            if str(self.words[i].word) == user_word:
                 self.cleared_words.append(self.words[i])
+                database.logging_record(self.words[i].id, user)
                 self.words.pop(i)
-                self.logger.info(f"user {str(user)} cleared a word: {user_word} to {str(self.owner)}'s daily word")
-
-                database.logging_record(str(user), self.words[i].id)
-                return True
+                self.logger.info(f"user {str(user)} committed a correct answer: {user_word} to {str(self.owner)}'s daily word")
+                left_num = self.get_left_num()
+                
+                if left_num == 0:
+                    self.logger.info(f"user {str(self.owner)}'s daily word is cleared")
+                    self.all_daily_words.remove(self)
+                
+                return 'ok', left_num
+            
+        for j in range(len(self.cleared_words)):
+            if str(self.cleared_words[j].word) == user_word:
+                self.logger.info(f"user {str(user)} tried to commit a word that has already been cleared")
+                return 'duplicate', self.get_left_num()
 
         self.logger.info(f"user {str(user)} committed a wrong answer: {user_word} to {str(self.owner)}'s daily word")
-        return False
+        return 'wrong', self.get_left_num()
 
     def get_left_num(self):
         return self.word_num - len(self.cleared_words)

@@ -1,47 +1,11 @@
 import mysql.connector
-import random
-from __init__ import Logger
+from logger import Logger
 from flask import jsonify
+from word import Word
+from user import User
 
-class Word:
-    def __init__(self, word_id, word, pronunciation_uk, pronunciation_us):
-        self.id = word_id
-        self.word = word
-        self.pronunciation_uk = pronunciation_uk
-        self.pronunciation_us = pronunciation_us
-        self.meanings = []
 
-    def add_meaning(self, part_of_speech, definition):
-        self.meanings.append((part_of_speech, definition))
 
-    def get_dictation(self):
-        s = f'[英]/{self.pronunciation_us}/ [美]/{self.pronunciation_uk}/ '
-        for meaning in self.meanings:
-            s += f'<{meaning[0]}>.{meaning[1]}; '
-        return s
-
-    def __str__(self):
-        s = f'{self.word} [英]/{self.pronunciation_us}/ [美]/{self.pronunciation_uk}/ '
-        for meaning in self.meanings:
-            s += f'<{meaning[0]}>.{meaning[1]}; '
-        return s
-
-    # def __eq__(self, other):
-    #     return self.word == other
-
-class User:
-    def __init__(self, user_id=None, user_qqid=None, username=None):
-        self.id = user_id
-        self.username = username
-        self.qqid = user_qqid
-
-    def __eq__(self, other):
-        return self.id == other.id or self.qqid == other.qqid or self.username == other.username
-
-    def __str__(self):
-        return str(self.id or self.qqid or self.username or 'unknown user')
-
-    
 class Database:
     logger = Logger('database')
 
@@ -86,11 +50,13 @@ class Database:
             result = cur.fetchone()
             cur.close()
             if result:
+                self.logger.info(f'get register info for {str(user)}: success')
                 user.id = result[0]
                 user.username = result[1]
                 user.qqid = result[2]
                 return True
             else:
+                self.logger.info(f'get register info for {str(user)}: failed')
                 return False
         except Exception as e:
             self.logger.error(f'failed to get register info for {str(user)} due to [{str(e)}] when getting register info')
@@ -128,39 +94,43 @@ class Database:
         finally:
             cur.close()
 
-    def get_words(self, num):
-        # 获取单词数量
-        try:
-            self.logger.info(f'getting {num} words')
-            cur = self.conn_word.cursor()
-            cur.execute("SELECT COUNT(*) FROM words")
-            count = cur.fetchone()[0]
-        except Exception as e:
-            self.logger.error(f'failed to get words due to [{str(e)}] when counting words')
-            return []
-
+    def get_words(self, num, user:User=None):
+        """
+        获取指定数量的单词    
+        :param num: 单词数量
+        :param user: 用户对象，如果非空，则从用户的学习记录中获取单词，否则从所有单词中获取
+        :return: 单词列表
+        """
         # 随机获取单词
         words = []
-        for i in range(30):
-            if len(words) >= num:
-                break
-            word_id = random.randint(1, count)
-            try:
-                cur.execute("SELECT * FROM words WHERE id= %s", (word_id,))
-                word = Word(*cur.fetchone())
-                cur.execute("SELECT * FROM meanings WHERE id= %s", (word_id,))
-                for meaning in cur.fetchall():
-                    word_id, part_of_speech, definition = meaning
-                    word.add_meaning(part_of_speech, definition)
+        cur = None
+        try:
+            cur = self.conn_word.cursor()  
+            if user is not None:
+                self.logger.info(f'getting {num} words from user {str(user)}\'s record')
+                cur.execute("SELECT u.id, w.word, w.pronunciation_uk, w.pronunciation_us, m.part_of_speech, m.definition FROM (SELECT * FROM user_record as r WHERE r.user_id=%s ORDER BY r.count LIMIT %s) as u NATURAL JOIN words as w NATURAL JOIN meanings as m", (user.id, num))  
+            else: 
+                self.logger.info(f'getting {num} words from word table')             
+                cur.execute("SELECT w.id, word, pronunciation_uk, pronunciation_us, part_of_speech, definition FROM (SELECT * FROM words ORDER BY RAND() LIMIT %s) AS w, meanings AS m where w.id=m.id", (num,))
+            word=None
+            result = cur.fetchall()
+            for row in result:
+                self.logger.debug(str(row))
+                if word and word.id == row[0]:
+                    word.add_meaning(row[4], row[5])
+                else:
+                    if word:
+                        words.append(word)
+                    word = Word(row[0], row[1], row[2], row[3])
+            if word:
                 words.append(word)
-            except Exception as e:
-                if i == 29:
-                    self.logger.error(f'failed to get word {word_id} due to [{str(e)}] when getting word')
-                    return []
-                self.logger.warning(f'failed to get word {word_id} due to [{str(e)}], retrying')
-                continue
-
-        cur.close() 
+        except Exception as e:
+            self.logger.error(f'failed to get words due to [{str(e)}] when getting words')
+        finally:
+            if cur:
+                cur.close()    
+        if not words:
+            self.logger.error(f'no word matching condition found')              
         self.logger.info(f'got words: {[str(word) for word in words]}')
         return words
 
@@ -179,7 +149,7 @@ class Database:
         cur = None
         try:
             cur = self.conn_word.cursor()
-            cur.execute("INSERT INTO user_records (user_id, word_id, count) VALUES (%s, %s, 1) ON DUPLICATE KEY UPDATE count=count+1", (str(user), word_id))
+            cur.execute("INSERT INTO user_record (user_id, id, count) VALUES (%s, %s, 1) ON DUPLICATE KEY UPDATE count=count+1", (str(user), word_id))
             self.conn_word.commit()
             self.logger.info(f'user {str(user)} logged record for word {word_id}')
             return jsonify({
