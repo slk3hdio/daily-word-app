@@ -11,7 +11,7 @@ conn = mysql.connector.connect(
 cur = conn.cursor()
 
 
-client = OpenAI(api_key = '3b144066-c88f-4796-b19e-1fa3cc71253b', base_url = 'https://ark.cn-beijing.volces.com/api/v3')
+client = OpenAI(api_key = '', base_url = 'https://ark.cn-beijing.volces.com/api/v3')
 
 
 cur.execute("SELECT * FROM words where id > 2000")
